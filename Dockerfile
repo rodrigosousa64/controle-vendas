@@ -13,6 +13,8 @@ RUN mkdir -p /app/data && chown 10001:10001 /app/data
 
 WORKDIR /app
 COPY --from=build /app/build/vendas ./vendas
+COPY templates/ templates/
+COPY static/ static/
 COPY web/ web/
 
 USER 10001:10001

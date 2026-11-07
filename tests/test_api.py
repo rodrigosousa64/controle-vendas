@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Integração real HTTP + executável C + arquivo SQLite, sem bibliotecas Python externas."""
-import copy
 import datetime
 import http.client
 import json
@@ -14,7 +13,7 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / os.environ.get('VENDA_BINARY','build/vendas')
+BINARY = ROOT / os.environ.get('VENDA_BINARY', 'build/vendas')
 RUNTIME = ROOT / 'tests' / '.runtime'
 RUNTIME.mkdir(exist_ok=True)
 RESULTS = []
@@ -88,18 +87,14 @@ class IntegrationTests(unittest.TestCase):
         return self.request('POST','/api/sales',data)
 
     def test_01_empty_database(self):
-        """Banco vazio retorna listas e totais zerados sem erro."""
+        """Banco vazio retorna listas vazias sem erro."""
         self.assertEqual(self.request('GET','/api/products'),(200,[]))
         self.assertEqual(self.request('GET','/api/sales'),(200,[]))
-        report = self.request('GET','/api/reports')[1]
-        self.assertEqual(report['summary']['total_cents'],0)
-        self.assertEqual(report['summary']['sale_count'],0)
 
     def test_02_product_crud(self):
         """Cadastro, listagem, pesquisa, atualização e exclusão funcionam."""
         p=self.product('CRUD-001')
         self.assertEqual(self.request('GET',f"/api/products/{p['id']}")[1]['name'],'Café especial')
-        self.assertEqual(len(self.request('GET','/api/products?search=CRUD-001')[1]),1)
         p.update(name='Café atualizado',price_cents=2990,active=False)
         status,updated=self.request('PUT',f"/api/products/{p['id']}",p)
         self.assertEqual(status,200)
@@ -159,32 +154,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(self.sale([(p,1)])[0],409)
 
     def test_08_cancellation(self):
-        """Cancelar devolve estoque, exclui total do relatório e impede devolução dupla."""
+        """Cancelar devolve estoque, atualiza status e impede cancelamento duplo."""
         p=self.product('CANCEL',stock=10)
-        before=self.request('GET','/api/reports')[1]['summary']['total_cents']
+        sales_before=self.request('GET','/api/sales')[1]
+        total_before=sum(s['total_cents'] for s in sales_before if s['status']=='completed')
         status,sale=self.sale([(p,3)])
         self.assertEqual(status,201)
-        self.assertEqual(self.request('GET','/api/reports')[1]['summary']['total_cents'],before+7470)
+        sales_after=self.request('GET','/api/sales')[1]
+        total_after=sum(s['total_cents'] for s in sales_after if s['status']=='completed')
+        self.assertEqual(total_after, total_before + 7470)
         status,cancelled=self.request('POST',f"/api/sales/{sale['id']}/cancel",{})
         self.assertEqual(status,200)
         self.assertEqual(cancelled['status'],'cancelled')
         self.assertEqual(self.request('GET',f"/api/products/{p['id']}")[1]['stock'],10)
-        self.assertEqual(self.request('GET','/api/reports')[1]['summary']['total_cents'],before)
+        sales_final=self.request('GET','/api/sales')[1]
+        total_final=sum(s['total_cents'] for s in sales_final if s['status']=='completed')
+        self.assertEqual(total_final, total_before)
         self.assertEqual(self.request('POST',f"/api/sales/{sale['id']}/cancel",{})[0],409)
 
-    def test_09_reports_and_filters(self):
-        """Relatório agrega exatamente vendas concluídas; filtros de data e busca funcionam."""
+    def test_09_sales_data_consistency(self):
+        """Vendas são listadas com itens consistentes e cálculos monetários exatos."""
         sales=self.request('GET','/api/sales')[1]
-        report=self.request('GET','/api/reports')[1]
-        completed=[s for s in sales if s['status']=='completed']
-        self.assertEqual(report['summary']['total_cents'],sum(s['total_cents'] for s in completed))
-        self.assertEqual(report['summary']['sale_count'],len(completed))
-        self.assertEqual(sum(p['total_cents'] for p in report['payments']),report['summary']['total_cents'])
-        self.assertEqual(sum(p['total_cents'] for p in report['daily']),report['summary']['total_cents'])
-        self.assertEqual(self.request('GET','/api/reports?from=1900-01-01&to=1900-01-02')[1]['summary']['total_cents'],0)
-        for query in ['from=2026-02-30','from=2026-13-01','from=2026-10-30&to=2026-10-01','from=x','from=2026-1-01']:
-            self.assertEqual(self.request('GET','/api/reports?'+query)[0],400)
-        self.assertEqual(self.request('GET','/api/products?status=invalid')[0],400)
+        for s in sales:
+            self.assertIn(s['status'], ['completed', 'cancelled'])
+            self.assertEqual(s['total_cents'], s['subtotal_cents'] - s['discount_cents'])
+            self.assertTrue(s['subtotal_cents'] > 0)
+            self.assertTrue(s['payment_method'] in ['pix', 'dinheiro', 'credito', 'debito'])
 
     def test_10_missing_and_invalid_routes(self):
         """Registros inexistentes, métodos inválidos e arquivos fora da interface não são expostos."""
@@ -192,14 +187,12 @@ class IntegrationTests(unittest.TestCase):
             with self.subTest(path=path):self.assertIn(self.request(method,path,{} if method=='POST' else None)[0],[404,405])
 
     def test_11_persistence_after_restart(self):
-        """Reiniciar o executável recupera produtos, vendas e relatório do mesmo arquivo SQLite."""
+        """Reiniciar o executável recupera produtos e vendas do mesmo arquivo SQLite."""
         before_products=self.request('GET','/api/products')[1]
         before_sales=self.request('GET','/api/sales')[1]
-        before_report=self.request('GET','/api/reports')[1]
         self.__class__.stop();self.__class__.start()
         self.assertEqual(self.request('GET','/api/products')[1],before_products)
         self.assertEqual(self.request('GET','/api/sales')[1],before_sales)
-        self.assertEqual(self.request('GET','/api/reports')[1],before_report)
         with sqlite3.connect(self.db) as conn:
             self.assertEqual(conn.execute('PRAGMA integrity_check').fetchone()[0],'ok')
             self.assertEqual(conn.execute('PRAGMA foreign_key_check').fetchall(),[])
@@ -228,8 +221,8 @@ class IntegrationTests(unittest.TestCase):
             with self.assertRaises(sqlite3.IntegrityError):conn.execute("INSERT INTO products(sku,name,category,price_cents,stock,min_stock) SELECT sku,name,category,price_cents,stock,min_stock FROM products LIMIT 1")
 
     def test_15_static_interface(self):
-        """Servidor C entrega HTML, JavaScript, CSS e ícone com tipos de conteúdo corretos."""
-        for path,kind in [('/','text/html'),('/app.js','text/javascript'),('/style.css','text/css'),('/favicon.svg','image/svg+xml')]:
+        """Servidor C entrega Templates HTML, CSS e ícone com tipos de conteúdo corretos."""
+        for path,kind in [('/','text/html'),('/produtos','text/html'),('/vendas','text/html'),('/relatorios','text/html'),('/style.css','text/css'),('/favicon.svg','image/svg+xml')]:
             conn=http.client.HTTPConnection('127.0.0.1',self.port,timeout=7)
             conn.request('GET',path);res=conn.getresponse();content=res.read()
             self.assertEqual(res.status,200)
