@@ -4,6 +4,8 @@ export interface ProductData {
   category: string;
   price_cents: number;
   stock: number;
+  min_stock?: number;
+  notes?: string;
 }
 
 export interface Product extends ProductData {

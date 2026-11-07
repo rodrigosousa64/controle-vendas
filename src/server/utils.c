@@ -75,8 +75,16 @@ int json_para_produto(const char *json_str, Product *out) {
              extrair_texto(root, "category", out->category, sizeof(out->category), 1) &&
              extrair_texto(root, "notes", out->notes, sizeof(out->notes), 0) &&
              extrair_inteiro(root, "price_cents", 1, MAX_PRICE_CENTS, &out->price_cents) &&
-             extrair_inteiro(root, "stock", 0, MAX_QUANTITY, &stock) &&
-             extrair_inteiro(root, "min_stock", 0, MAX_QUANTITY, &min_stock);
+             extrair_inteiro(root, "stock", 0, MAX_QUANTITY, &stock);
+
+    const cJSON *item_min = cJSON_GetObjectItemCaseSensitive(root, "min_stock");
+    if (item_min && !cJSON_IsNull(item_min)) {
+        if (!extrair_inteiro(root, "min_stock", 0, MAX_QUANTITY, &min_stock)) {
+            ok = 0;
+        }
+    } else {
+        min_stock = 0;
+    }
 
     if (active && !cJSON_IsBool(active)) ok = 0;
 
@@ -139,8 +147,16 @@ int json_para_venda_rascunho(const char *json_str, Sale *out) {
 
     int ok = extrair_texto(root, "customer", out->customer, sizeof(out->customer), 0) &&
              extrair_texto(root, "payment_method", out->payment_method, sizeof(out->payment_method), 1) &&
-             extrair_texto(root, "notes", out->notes, sizeof(out->notes), 0) &&
-             extrair_inteiro(root, "discount_cents", 0, MAX_SALE_CENTS, &out->discount_cents);
+             extrair_texto(root, "notes", out->notes, sizeof(out->notes), 0);
+
+    const cJSON *item_discount = cJSON_GetObjectItemCaseSensitive(root, "discount_cents");
+    if (item_discount && !cJSON_IsNull(item_discount)) {
+        if (!extrair_inteiro(root, "discount_cents", 0, MAX_SALE_CENTS, &out->discount_cents)) {
+            ok = 0;
+        }
+    } else {
+        out->discount_cents = 0;
+    }
 
     if (!ok) {
         cJSON_Delete(root);

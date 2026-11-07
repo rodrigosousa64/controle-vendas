@@ -42,6 +42,8 @@ export class ProductForm {
       await firstValueFrom(this.api.saveProduct(id, {
         sku: sku.trim(), name: name.trim(), category: category.trim(),
         price_cents, stock, active,
+        min_stock: (this.product() as any)?.min_stock ?? 0,
+        notes: (this.product() as any)?.notes ?? '',
       }));
       this.workspace.modal.set(null);
       this.workspace.toast(id ? 'Produto atualizado.' : 'Produto cadastrado.');
