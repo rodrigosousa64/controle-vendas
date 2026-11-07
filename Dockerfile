@@ -5,7 +5,7 @@ COPY Makefile ./
 COPY include/ include/
 COPY src/ src/
 COPY vendor/ vendor/
-RUN make -j2
+RUN make build/vendas
 
 FROM debian:bookworm-slim AS runtime
 
@@ -13,9 +13,8 @@ RUN mkdir -p /app/data && chown 10001:10001 /app/data
 
 WORKDIR /app
 COPY --from=build /app/build/vendas ./vendas
-COPY templates/ templates/
-COPY static/ static/
-COPY web/ web/
+COPY web/dist/ /app/web/dist/
+COPY data/ /app/data/
 
 USER 10001:10001
 ENV PORT=8080

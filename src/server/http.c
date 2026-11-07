@@ -9,6 +9,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define ANGULAR_ROOT "web/dist/browser"
+
 static volatile sig_atomic_t g_running = 1;
 static struct mg_context *g_server_context = NULL;
 
@@ -41,7 +43,7 @@ static void enviar_resposta_json(struct mg_connection *conn, Response *resp) {
     resp->body = NULL;
 }
 
-/* Handler geral para requisições de API */
+/* Handler central para todas as requisições /api/ */
 static int api_handler(struct mg_connection *conn, void *cbdata) {
     (void)cbdata;
     const struct mg_request_info *info = mg_get_request_info(conn);
@@ -70,7 +72,7 @@ static int api_handler(struct mg_connection *conn, void *cbdata) {
         body_len = strtol(len_header, &end, 10);
         if (errno || !end || *end || body_len < 0 || body_len > MAX_BODY) {
             Response resp = json_erro(body_len > MAX_BODY ? 413 : 400,
-                                      body_len > MAX_BODY ? "Corpo da requisição acima de 64 KiB." : "Tamanho inválido.");
+                                      body_len > MAX_BODY ? "Corpo acima do limite." : "Tamanho inválido.");
             enviar_resposta_json(conn, &resp);
             return 1;
         }
@@ -94,7 +96,7 @@ static int api_handler(struct mg_connection *conn, void *cbdata) {
         req.body_len = (size_t)body_len;
     }
 
-    /* Delega para o Roteador */
+    /* Delega para o Roteador das Views em C */
     Response resp = rotear_requisicao(&req);
     enviar_resposta_json(conn, &resp);
 
@@ -102,11 +104,11 @@ static int api_handler(struct mg_connection *conn, void *cbdata) {
     return 1;
 }
 
-/* Helper para enviar arquivos com cabeçalhos de segurança */
-static int enviar_arquivo_estatico(struct mg_connection *conn, const char *caminho, const char *mime_type) {
+/* Envia um arquivo estático com cabeçalhos de segurança adequados */
+static int enviar_arquivo(struct mg_connection *conn, const char *caminho, const char *mime_type) {
     FILE *f = fopen(caminho, "rb");
     if (!f) {
-        Response resp = json_erro(404, "Arquivo não encontrado.");
+        Response resp = json_erro(404, "Arquivo da interface não encontrado. Execute make na pasta do projeto.");
         enviar_resposta_json(conn, &resp);
         return 1;
     }
@@ -134,74 +136,45 @@ static int enviar_arquivo_estatico(struct mg_connection *conn, const char *camin
     return 1;
 }
 
-static int angular_disponivel(void) {
-    return access("web/dist/browser/index.html", R_OK) == 0;
-}
-
-/* Handler para páginas (Angular SPA ou Templates MVT) */
-static int page_handler(struct mg_connection *conn, void *data) {
-    const char *fallback_template = (const char *)data;
-    if (angular_disponivel()) {
-        return enviar_arquivo_estatico(conn, "web/dist/browser/index.html", "text/html; charset=utf-8");
-    }
-    return enviar_arquivo_estatico(conn, fallback_template, "text/html; charset=utf-8");
-}
-
-/* Handler para arquivos estáticos (CSS, JS do Angular, Imagens) */
-static int static_assets_handler(struct mg_connection *conn, void *data) {
+/* Handler para arquivos do frontend Angular SPA */
+static int frontend_handler(struct mg_connection *conn, void *data) {
     (void)data;
     const struct mg_request_info *info = mg_get_request_info(conn);
     const char *uri = info->local_uri;
 
-    char caminho_arquivo[512] = {0};
+    char caminho[512];
 
-    /* 1. Verifica se é um arquivo do build do Angular (web/dist/browser/) */
-    if (angular_disponivel() && uri[0] == '/') {
-        char angular_path[512];
-        snprintf(angular_path, sizeof(angular_path), "web/dist/browser%s", uri);
-        if (access(angular_path, R_OK) == 0) {
-            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "%s", angular_path);
-        }
+    /* 1. Se requisitou a raiz ou arquivo específico */
+    if (strcmp(uri, "/") == 0 || strcmp(uri, "/index.html") == 0) {
+        return enviar_arquivo(conn, ANGULAR_ROOT "/index.html", "text/html; charset=utf-8");
     }
 
-    /* 2. Caso contrário, verifica os assets legados/templates */
-    if (caminho_arquivo[0] == '\0') {
-        if (strncmp(uri, "/static/", 8) == 0) {
-            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/%s", uri + 8);
-        } else if (strcmp(uri, "/style.css") == 0) {
-            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/css/style.css");
-        } else if (strcmp(uri, "/favicon.svg") == 0) {
-            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "web/src/favicon.svg");
-            if (access(caminho_arquivo, R_OK) != 0) {
-                snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/img/favicon.svg");
-            }
-        }
+    /* 2. Verifica se o arquivo existe dentro do build do Angular */
+    snprintf(caminho, sizeof(caminho), "%s%s", ANGULAR_ROOT, uri);
+    if (access(caminho, R_OK) == 0) {
+        const char *mime = "text/plain";
+        if (strstr(caminho, ".css"))       mime = "text/css; charset=utf-8";
+        else if (strstr(caminho, ".js"))   mime = "application/javascript; charset=utf-8";
+        else if (strstr(caminho, ".svg"))  mime = "image/svg+xml";
+        else if (strstr(caminho, ".html")) mime = "text/html; charset=utf-8";
+        else if (strstr(caminho, ".json")) mime = "application/json; charset=utf-8";
+        return enviar_arquivo(conn, caminho, mime);
     }
 
-    if (caminho_arquivo[0] == '\0' || access(caminho_arquivo, R_OK) != 0) {
-        /* Se for rota SPA do Angular, serve index.html */
-        if (angular_disponivel()) {
-            return enviar_arquivo_estatico(conn, "web/dist/browser/index.html", "text/html; charset=utf-8");
-        }
-        Response resp = json_erro(404, "Recurso não encontrado.");
-        enviar_resposta_json(conn, &resp);
-        return 1;
+    /* 3. Se for uma rota SPA do Angular (/products, /sales, /reports), serve index.html */
+    if (access(ANGULAR_ROOT "/index.html", R_OK) == 0) {
+        return enviar_arquivo(conn, ANGULAR_ROOT "/index.html", "text/html; charset=utf-8");
     }
 
-    const char *mime = "text/plain";
-    if (strstr(caminho_arquivo, ".css"))       mime = "text/css; charset=utf-8";
-    else if (strstr(caminho_arquivo, ".js"))   mime = "application/javascript; charset=utf-8";
-    else if (strstr(caminho_arquivo, ".svg"))  mime = "image/svg+xml";
-    else if (strstr(caminho_arquivo, ".html")) mime = "text/html; charset=utf-8";
-    else if (strstr(caminho_arquivo, ".json")) mime = "application/json; charset=utf-8";
-
-    return enviar_arquivo_estatico(conn, caminho_arquivo, mime);
+    Response resp = json_erro(404, "Interface não compilada. Execute 'make' para compilar.");
+    enviar_resposta_json(conn, &resp);
+    return 1;
 }
 
 /* Bloqueio de segurança para diretórios internos */
 static int not_found_handler(struct mg_connection *conn, void *data) {
     (void)data;
-    Response resp = json_erro(404, "Acesso negado.");
+    Response resp = json_erro(404, "Acesso restrito.");
     enviar_resposta_json(conn, &resp);
     return 1;
 }
@@ -226,39 +199,23 @@ int http_run(const char *host, int port) {
         return 1;
     }
 
-    /* Registro das rotas da API */
+    /* 1. API C */
     mg_set_request_handler(g_server_context, "/api/", api_handler, NULL);
 
-    /* Registro dos Templates / SPA */
-    mg_set_request_handler(g_server_context, "/$", page_handler, "templates/dashboard.html");
-    mg_set_request_handler(g_server_context, "/dashboard$", page_handler, "templates/dashboard.html");
-    mg_set_request_handler(g_server_context, "/index.html$", page_handler, "templates/dashboard.html");
-    mg_set_request_handler(g_server_context, "/produtos$", page_handler, "templates/produtos.html");
-    mg_set_request_handler(g_server_context, "/products$", page_handler, "templates/produtos.html");
-    mg_set_request_handler(g_server_context, "/vendas$", page_handler, "templates/vendas.html");
-    mg_set_request_handler(g_server_context, "/sales$", page_handler, "templates/vendas.html");
-    mg_set_request_handler(g_server_context, "/relatorios$", page_handler, "templates/relatorios.html");
-    mg_set_request_handler(g_server_context, "/reports$", page_handler, "templates/relatorios.html");
-
-    /* Registro de arquivos estáticos e bundles do Angular */
-    mg_set_request_handler(g_server_context, "/static/", static_assets_handler, NULL);
-    mg_set_request_handler(g_server_context, "/style.css$", static_assets_handler, NULL);
-    mg_set_request_handler(g_server_context, "/favicon.svg$", static_assets_handler, NULL);
-    mg_set_request_handler(g_server_context, "/*.js$", static_assets_handler, NULL);
-    mg_set_request_handler(g_server_context, "/*.css$", static_assets_handler, NULL);
-
-    /* Proteção de diretórios internos */
+    /* 2. Bloqueio de segurança */
     mg_set_request_handler(g_server_context, "/data/", not_found_handler, NULL);
     mg_set_request_handler(g_server_context, "/src/", not_found_handler, NULL);
     mg_set_request_handler(g_server_context, "/vendor/", not_found_handler, NULL);
-    mg_set_request_handler(g_server_context, "/templates/", not_found_handler, NULL);
+
+    /* 3. Frontend Angular SPA */
+    mg_set_request_handler(g_server_context, "/", frontend_handler, NULL);
 
     signal(SIGINT, tratar_sinal);
     signal(SIGTERM, tratar_sinal);
 
     printf("\n  ======================================================\n");
     printf("  VENDA • Sistema de Controle de Vendas %s\n", APP_VERSION);
-    printf("  Frontend Angular + Backend C MVT (Model-View-Template)\n");
+    printf("  Frontend Angular + Backend C Modular (Arquitetura MVT)\n");
     printf("  Acesse no navegador: http://127.0.0.1:%d\n", port);
     printf("  Pressione Ctrl+C para encerrar o servidor com segurança.\n");
     printf("  ======================================================\n\n");

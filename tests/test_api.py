@@ -221,8 +221,8 @@ class IntegrationTests(unittest.TestCase):
             with self.assertRaises(sqlite3.IntegrityError):conn.execute("INSERT INTO products(sku,name,category,price_cents,stock,min_stock) SELECT sku,name,category,price_cents,stock,min_stock FROM products LIMIT 1")
 
     def test_15_static_interface(self):
-        """Servidor C entrega Templates HTML, CSS e ícone com tipos de conteúdo corretos."""
-        for path,kind in [('/','text/html'),('/produtos','text/html'),('/vendas','text/html'),('/relatorios','text/html'),('/style.css','text/css'),('/favicon.svg','image/svg+xml')]:
+        """Servidor C entrega aplicação SPA Angular e ícone com tipos de conteúdo corretos."""
+        for path,kind in [('/','text/html'),('/products','text/html'),('/sales','text/html'),('/reports','text/html'),('/favicon.svg','image/svg+xml')]:
             conn=http.client.HTTPConnection('127.0.0.1',self.port,timeout=7)
             conn.request('GET',path);res=conn.getresponse();content=res.read()
             self.assertEqual(res.status,200)
