@@ -1,10 +1,10 @@
 CC ?= cc
-CPPFLAGS = -Iinclude -Ivendor/sqlite -Ivendor/cjson -Ivendor/civetweb/include -D_POSIX_C_SOURCE=200809L
+CPPFLAGS = -Iinclude -Ivendor/sqlite -Ivendor/cjson -Ivendor/civetweb/include -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror
 LDLIBS = -lm -lpthread -ldl
 BUILD_DIR ?= build
 
-# Todos os fontes organizados em MVT
+# Todos os fontes organizados na arquitetura MVT em C
 SOURCES = \
     src/main.c \
     src/server/http.c \
@@ -23,13 +23,14 @@ SOURCES = \
     src/views/vendas/criar_venda.c \
     src/views/vendas/cancelar_venda.c \
     src/views/sistema/health.c \
-    src/views/sistema/encerrar.c
+    src/views/sistema/encerrar.c \
+    src/views/sistema/relatorios.c
 
 OBJECTS = $(patsubst src/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
 
-.PHONY: all run demo test clean sanitize package
+.PHONY: all run demo test clean sanitize package build-angular
 
-all: $(BUILD_DIR)/vendas
+all: $(BUILD_DIR)/vendas web/dist/browser/index.html
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR) data
@@ -51,13 +52,22 @@ $(BUILD_DIR)/civetweb.o: vendor/civetweb/src/civetweb.c vendor/civetweb/include/
 $(BUILD_DIR)/vendas: $(OBJECTS) $(BUILD_DIR)/sqlite3.o $(BUILD_DIR)/cJSON.o $(BUILD_DIR)/civetweb.o
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 
+web/dist/browser/index.html:
+	@if [ -d "web/src" ]; then \
+		echo "Compilando frontend Angular..."; \
+		npm --prefix web run build; \
+	fi
+
+build-angular:
+	npm --prefix web run build
+
 run: all
 	./build/vendas
 
 demo: all
 	./build/vendas --demo
 
-test: all
+test: $(BUILD_DIR)/vendas
 	python3 tests/test_api.py
 
 sanitize:

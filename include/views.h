@@ -24,6 +24,7 @@ Response endpoint_cancelar_venda(int64_t id);
 /* Views de Sistema (src/views/sistema/) */
 Response endpoint_health(const Request *req);
 Response endpoint_shutdown(const Request *req);
+Response endpoint_relatorios(const Request *req);
 
 /* Roteador Central (src/server/router.c) */
 Response rotear_requisicao(const Request *req);

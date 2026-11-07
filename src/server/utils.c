@@ -209,6 +209,7 @@ cJSON *venda_para_cjson(const Sale *s) {
     cJSON_AddStringToObject(obj, "status", s->status);
     cJSON_AddStringToObject(obj, "notes", s->notes);
     cJSON_AddStringToObject(obj, "created_at", s->created_at);
+    cJSON_AddNumberToObject(obj, "item_count", (double)s->item_count);
     if (s->cancelled_at[0]) {
         cJSON_AddStringToObject(obj, "cancelled_at", s->cancelled_at);
     } else {

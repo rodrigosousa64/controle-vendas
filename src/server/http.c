@@ -122,7 +122,7 @@ static int enviar_arquivo_estatico(struct mg_connection *conn, const char *camin
               "Cache-Control: no-store\r\n"
               "X-Content-Type-Options: nosniff\r\n"
               "Referrer-Policy: no-referrer\r\n"
-              "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'\r\n\r\n",
+              "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-ancestors 'none'\r\n\r\n",
               mime_type, size);
 
     char buffer[4096];
@@ -134,51 +134,66 @@ static int enviar_arquivo_estatico(struct mg_connection *conn, const char *camin
     return 1;
 }
 
-/* Handlers para as páginas HTML (Templates) */
-static int template_dashboard_handler(struct mg_connection *conn, void *data) {
-    (void)data;
-    return enviar_arquivo_estatico(conn, "templates/dashboard.html", "text/html; charset=utf-8");
+static int angular_disponivel(void) {
+    return access("web/dist/browser/index.html", R_OK) == 0;
 }
 
-static int template_produtos_handler(struct mg_connection *conn, void *data) {
-    (void)data;
-    return enviar_arquivo_estatico(conn, "templates/produtos.html", "text/html; charset=utf-8");
+/* Handler para páginas (Angular SPA ou Templates MVT) */
+static int page_handler(struct mg_connection *conn, void *data) {
+    const char *fallback_template = (const char *)data;
+    if (angular_disponivel()) {
+        return enviar_arquivo_estatico(conn, "web/dist/browser/index.html", "text/html; charset=utf-8");
+    }
+    return enviar_arquivo_estatico(conn, fallback_template, "text/html; charset=utf-8");
 }
 
-static int template_vendas_handler(struct mg_connection *conn, void *data) {
-    (void)data;
-    return enviar_arquivo_estatico(conn, "templates/vendas.html", "text/html; charset=utf-8");
-}
-
-static int template_relatorios_handler(struct mg_connection *conn, void *data) {
-    (void)data;
-    return enviar_arquivo_estatico(conn, "templates/relatorios.html", "text/html; charset=utf-8");
-}
-
-/* Handler para arquivos estáticos (CSS, JS, Imagens) */
+/* Handler para arquivos estáticos (CSS, JS do Angular, Imagens) */
 static int static_assets_handler(struct mg_connection *conn, void *data) {
     (void)data;
     const struct mg_request_info *info = mg_get_request_info(conn);
     const char *uri = info->local_uri;
 
-    char caminho_arquivo[512];
-    if (strncmp(uri, "/static/", 8) == 0) {
-        snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/%s", uri + 8);
-    } else if (strcmp(uri, "/style.css") == 0) {
-        snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/css/style.css");
-    } else if (strcmp(uri, "/favicon.svg") == 0) {
-        snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/img/favicon.svg");
-    } else {
+    char caminho_arquivo[512] = {0};
+
+    /* 1. Verifica se é um arquivo do build do Angular (web/dist/browser/) */
+    if (angular_disponivel() && uri[0] == '/') {
+        char angular_path[512];
+        snprintf(angular_path, sizeof(angular_path), "web/dist/browser%s", uri);
+        if (access(angular_path, R_OK) == 0) {
+            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "%s", angular_path);
+        }
+    }
+
+    /* 2. Caso contrário, verifica os assets legados/templates */
+    if (caminho_arquivo[0] == '\0') {
+        if (strncmp(uri, "/static/", 8) == 0) {
+            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/%s", uri + 8);
+        } else if (strcmp(uri, "/style.css") == 0) {
+            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/css/style.css");
+        } else if (strcmp(uri, "/favicon.svg") == 0) {
+            snprintf(caminho_arquivo, sizeof(caminho_arquivo), "web/src/favicon.svg");
+            if (access(caminho_arquivo, R_OK) != 0) {
+                snprintf(caminho_arquivo, sizeof(caminho_arquivo), "static/img/favicon.svg");
+            }
+        }
+    }
+
+    if (caminho_arquivo[0] == '\0' || access(caminho_arquivo, R_OK) != 0) {
+        /* Se for rota SPA do Angular, serve index.html */
+        if (angular_disponivel()) {
+            return enviar_arquivo_estatico(conn, "web/dist/browser/index.html", "text/html; charset=utf-8");
+        }
         Response resp = json_erro(404, "Recurso não encontrado.");
         enviar_resposta_json(conn, &resp);
         return 1;
     }
 
     const char *mime = "text/plain";
-    if (strstr(caminho_arquivo, ".css"))  mime = "text/css; charset=utf-8";
+    if (strstr(caminho_arquivo, ".css"))       mime = "text/css; charset=utf-8";
     else if (strstr(caminho_arquivo, ".js"))   mime = "application/javascript; charset=utf-8";
     else if (strstr(caminho_arquivo, ".svg"))  mime = "image/svg+xml";
     else if (strstr(caminho_arquivo, ".html")) mime = "text/html; charset=utf-8";
+    else if (strstr(caminho_arquivo, ".json")) mime = "application/json; charset=utf-8";
 
     return enviar_arquivo_estatico(conn, caminho_arquivo, mime);
 }
@@ -214,20 +229,25 @@ int http_run(const char *host, int port) {
     /* Registro das rotas da API */
     mg_set_request_handler(g_server_context, "/api/", api_handler, NULL);
 
-    /* Registro dos Templates HTML (Padrão MVT) */
-    mg_set_request_handler(g_server_context, "/$", template_dashboard_handler, NULL);
-    mg_set_request_handler(g_server_context, "/dashboard$", template_dashboard_handler, NULL);
-    mg_set_request_handler(g_server_context, "/index.html$", template_dashboard_handler, NULL);
-    mg_set_request_handler(g_server_context, "/produtos$", template_produtos_handler, NULL);
-    mg_set_request_handler(g_server_context, "/vendas$", template_vendas_handler, NULL);
-    mg_set_request_handler(g_server_context, "/relatorios$", template_relatorios_handler, NULL);
+    /* Registro dos Templates / SPA */
+    mg_set_request_handler(g_server_context, "/$", page_handler, "templates/dashboard.html");
+    mg_set_request_handler(g_server_context, "/dashboard$", page_handler, "templates/dashboard.html");
+    mg_set_request_handler(g_server_context, "/index.html$", page_handler, "templates/dashboard.html");
+    mg_set_request_handler(g_server_context, "/produtos$", page_handler, "templates/produtos.html");
+    mg_set_request_handler(g_server_context, "/products$", page_handler, "templates/produtos.html");
+    mg_set_request_handler(g_server_context, "/vendas$", page_handler, "templates/vendas.html");
+    mg_set_request_handler(g_server_context, "/sales$", page_handler, "templates/vendas.html");
+    mg_set_request_handler(g_server_context, "/relatorios$", page_handler, "templates/relatorios.html");
+    mg_set_request_handler(g_server_context, "/reports$", page_handler, "templates/relatorios.html");
 
-    /* Registro de arquivos estáticos */
+    /* Registro de arquivos estáticos e bundles do Angular */
     mg_set_request_handler(g_server_context, "/static/", static_assets_handler, NULL);
     mg_set_request_handler(g_server_context, "/style.css$", static_assets_handler, NULL);
     mg_set_request_handler(g_server_context, "/favicon.svg$", static_assets_handler, NULL);
+    mg_set_request_handler(g_server_context, "/*.js$", static_assets_handler, NULL);
+    mg_set_request_handler(g_server_context, "/*.css$", static_assets_handler, NULL);
 
-    /* Proteção de diretórios de código e dados */
+    /* Proteção de diretórios internos */
     mg_set_request_handler(g_server_context, "/data/", not_found_handler, NULL);
     mg_set_request_handler(g_server_context, "/src/", not_found_handler, NULL);
     mg_set_request_handler(g_server_context, "/vendor/", not_found_handler, NULL);
@@ -238,7 +258,7 @@ int http_run(const char *host, int port) {
 
     printf("\n  ======================================================\n");
     printf("  VENDA • Sistema de Controle de Vendas %s\n", APP_VERSION);
-    printf("  Arquitetura MVT (Model-View-Template) com C + Web\n");
+    printf("  Frontend Angular + Backend C MVT (Model-View-Template)\n");
     printf("  Acesse no navegador: http://127.0.0.1:%d\n", port);
     printf("  Pressione Ctrl+C para encerrar o servidor com segurança.\n");
     printf("  ======================================================\n\n");

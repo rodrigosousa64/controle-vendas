@@ -36,6 +36,7 @@ Response rotear_requisicao(const Request *req) {
     /* === ROTAS DE SISTEMA === */
     if (rota_exata(req, "GET",  "/api/health"))    return endpoint_health(req);
     if (rota_exata(req, "POST", "/api/shutdown"))  return endpoint_shutdown(req);
+    if (rota_exata(req, "GET",  "/api/reports"))   return endpoint_relatorios(req);
 
     /* === ROTAS DE PRODUTOS === */
     if (rota_exata(req, "GET",  "/api/products"))  return endpoint_listar_produtos(req);
